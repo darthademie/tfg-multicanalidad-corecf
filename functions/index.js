@@ -117,14 +117,18 @@ exports.procesadorDeOfertas = functions.database.ref('/cola_procesamiento/oferta
         return null;
       }
 
-      // 4. Resolvemos el nombre completa del producto objetivo (Target)
+      // 4. Resolvemos el nombre completa del producto objetivo y su clave de tarifa (Target)
       let nombreTarget = "Oferta Especial";
+      let tarifaTaget = "tarifa";
       if (ofertaData.type === 'device') {
         const dispRef = await db.ref(`dispositivos/${ofertaData.target}`).once('value');
         if (dispRef.exists()) nombreTarget = dispRef.val();
       } else if (ofertaData.type === 'plan') {
         const tarifaRef = await db.ref(`tarifas/${ofertaData.target}/nombre`).once('value');
-        if (tarifaRef.exists()) nombreTarget = tarifaRef.val();
+        if (tarifaRef.exists()) {
+          tarifaTaget = ofertaData.target;
+          nombreTarget = tarifaRef.val();
+        }
       }
 
       // 5. Transformamos el campo origin si viene de la web
@@ -135,6 +139,7 @@ exports.procesadorDeOfertas = functions.database.ref('/cola_procesamiento/oferta
         chat_id: chatId,
         discount: ofertaData.discount,
         name: nombreTarget,
+        plan: tarifaTaget,
         origin: originTransformado,
         processed: false, // Siempre a false, lo procesará el bot de Python
         type: ofertaData.type
