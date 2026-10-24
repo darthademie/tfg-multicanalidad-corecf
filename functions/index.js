@@ -128,15 +128,18 @@ exports.procesarOfertas = functions.database.ref('/cola_procesamiento/ofertas/{t
       }
     }
 
-    // 5. Transformamos el campo origin si viene de la web
+    // 5. Transformamos el campo origin según el canal de entrada
     let originTransformado;
-    switch (originEntrada) {
+    switch (originEntrada?.trim().toLowerCase()) {
       case 'web':
-        originTransformado = "Gestión de pedidos web de TeleUPM"
+        originTransformado = "Gestión de pedidos web de TeleUPM";
+        break;
       case 'mobile':
-        originTransformado = "Aplicación de TeleUPM"
+        originTransformado = "TeleUPM";
+        break;
       default:
-        originTransformado = originEntrada
+        originTransformado = originEntrada;
+        break;
     }
     
 
