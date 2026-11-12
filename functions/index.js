@@ -170,6 +170,77 @@ exports.procesarOfertas = functions.database.ref('/cola_procesamiento/ofertas/{t
   }
 });
 
+exports.procesarColaEmails = functions.database.ref('/cola_procesamiento/emails/{pushId}')
+  .onCreate(async (snapshot, context) => {
+    
+    // 1. Extraemos los datos que acaban de entrar
+    const data = snapshot.val();
+    const uid_fb = data.uid_fb;
+    const code = data.code;
+
+    if (!uid_fb || !code) {
+      console.error("Faltan datos en el nodo de la cola:", data);
+      return null;
+    }
+
+    try {
+      // 2. Buscamos el email del usuario y su nombreen la RTDB usando el uid_fb
+      const emailRef = admin.database().ref(`/usuarios/${uid_fb}/email`);
+      const emailSnapshot = await emailRef.once('value');
+      const emailDestino = emailSnapshot.val();
+
+      if (!emailDestino) {
+        console.error(`No se encontró la propiedad 'email' para el usuario: ${uid_fb}`);
+        return null;
+      }
+
+      const nameRef = admin.database().ref(`/usuarios/${uid_fb}/nombre`);
+      const nameSnapshot = await nameRef.once('value');
+      const nameDestino = nameSnapshot.val();
+
+      if (!nameDestino) {
+        console.error(`No se encontró la propiedad 'name' para el usuario: ${uid_fb}`);
+        return null;
+      }
+
+      // 3. Preparamos el objeto final para n8n
+      const payloadWebhook = {
+        code: code,
+        email: emailDestino,
+        name: nameDestino
+      };
+
+      // 4. Hacemos el salto externo hacia tu clúster (aquí pondrás la URL de ngrok para probar)
+      const N8N_WEBHOOK_URL = 'https://pluck-treadmill-stony.ngrok-free.dev/flujos/webhook/email-webhook';
+      
+      console.log(`Enviando webhook a n8n para el usuario ${emailDestino} con código ${code}...`);
+      
+      const response = await fetch(N8N_WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payloadWebhook)
+      });
+
+      if (!response.ok) {
+        throw new Error(`n8n devolvió un error: ${response.status} ${response.statusText}`);
+      }
+
+      console.log("Webhook procesado correctamente por N8N.");
+
+      // 5. Borramos el nodo de la cola para que no ocupe espacio
+      await snapshot.ref.remove();
+
+      return null;
+
+    } catch (error) {
+      // Aquí caerán los timeouts si Windows/Podman están apagados o ngrok está caído
+      console.error("Error crítico al procesar o enviar el webhook:", error);
+      return null;
+    }
+  });
+
 //////////////////////////////////////////////////////////////////////////////////////
 //////////// FUNCIONES DE TIPO BACKEND ///////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////
