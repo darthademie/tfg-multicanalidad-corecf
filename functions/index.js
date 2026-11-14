@@ -6,9 +6,70 @@ const admin = require('firebase-admin');
 admin.initializeApp();
 
 //////////////////////////////////////////////////////////////////////////////////////
+//////////// FUNCIONES REACTIVAS A FIREBASE AUTH /////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////
+
+// Función 1: Bienvenida al registrarse
+exports.procesarRegistroUsuario = functions.auth.user().onCreate(async (user) => {
+    const uid = user.uid;
+    const email = user.email;
+
+    logger.info(`Nuevo usuario registrado en Auth: ${uid} - ${email}`);
+
+    try {
+        // Encolamos el evento en la RTDB para que lo procese la función de emails
+        const emailData = {
+            uid_fb: uid,
+            code: "registro_usuario",
+            email: email
+        };
+
+        await admin.database().ref('cola_procesamiento/emails').push(emailData);
+        logger.info(`Evento de bienvenida encolado para el usuario ${uid}.`);
+
+        return null;
+
+    } catch (error) {
+        logger.error("Error al encolar el evento de bienvenida:", error);
+        return null;
+    }
+});
+
+// Función 2: Limpieza y despedida al eliminar cuenta
+exports.limpiarDatosUsuario = functions.auth.user().onDelete(async (user) => {
+    const uid = user.uid;
+    const email = user.email;
+
+    logger.info(`Usuario eliminado de Auth: ${uid}. Procediendo a limpieza...`);
+
+    try {
+        // 1. Enviar evento a la cola de emails para el correo de despedida
+        const emailData = {
+            uid_fb: uid,
+            code: "cuenta_eliminada",
+            email: email // Lo pasamos directamente de Firebase Auth por si el nodo de BBDD ya se borró
+        };
+        
+        await admin.database().ref('cola_procesamiento/emails').push(emailData);
+        logger.info(`Evento de despedida encolado para el usuario ${uid}.`);
+
+        // 2. Limpiar el nodo del usuario en Realtime Database
+        await admin.database().ref(`/usuarios/${uid}`).remove();
+        logger.info(`Nodo de Realtime Database (/usuarios/${uid}) eliminado correctamente.`);
+
+        return null;
+
+    } catch (error) {
+        logger.error(`Error durante la limpieza del usuario ${uid}:`, error);
+        return null;
+    }
+});
+
+//////////////////////////////////////////////////////////////////////////////////////
 //////////// FUNCIONES REACTIVAS A CAMBIOS EN LA RTDB ////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////
 
+// Función 1: Procesamiento de pedidos de usuario centralizado para la gestión de TeleUPM
 exports.procesarPedidos = functions.database.ref('/cola_procesamiento/pedidos/{nodo}')
   .onCreate(async (snapshot, context) => {
       const data = snapshot.val();
@@ -76,6 +137,8 @@ exports.procesarPedidos = functions.database.ref('/cola_procesamiento/pedidos/{n
       return null;
   });
 
+  // Función 2: Procesamiento de ofertas. Si la compra de un dispositivo o tarifa tiene
+  // oferta, se le notificará al usuario por Telegram
 exports.procesarOfertas = functions.database.ref('/cola_procesamiento/ofertas/{tareaId}')
 .onCreate(async (snapshot, context) => {
   
@@ -170,6 +233,8 @@ exports.procesarOfertas = functions.database.ref('/cola_procesamiento/ofertas/{t
   }
 });
 
+// Función 3: Procesamiento de emails. Una aplicación puede solicitar mandarle un email
+// al usuario según sus circunstancias y lo que tenga N8N admitido
 exports.procesarColaEmails = functions.database.ref('/cola_procesamiento/emails/{pushId}')
   .onCreate(async (snapshot, context) => {
     
@@ -184,23 +249,31 @@ exports.procesarColaEmails = functions.database.ref('/cola_procesamiento/emails/
     }
 
     try {
-      // 2. Buscamos el email del usuario y su nombreen la RTDB usando el uid_fb
-      const emailRef = admin.database().ref(`/usuarios/${uid_fb}/email`);
-      const emailSnapshot = await emailRef.once('value');
-      const emailDestino = emailSnapshot.val();
+      // 2. Extraer datos si vienen directos (ej: desde los triggers de auth o app).
+      // Si no vienen, se buscan en la RTDB.
+      let emailDestino = data.email;
+      let nameDestino = data.name;
+
+      if (!emailDestino) {
+        const emailRef = admin.database().ref(`/usuarios/${uid_fb}/email`);
+        const emailSnapshot = await emailRef.once('value');
+        emailDestino = emailSnapshot.val();
+      }
+
+      if (!nameDestino) {
+        const nameRef = admin.database().ref(`/usuarios/${uid_fb}/nombre`);
+        const nameSnapshot = await nameRef.once('value');
+        nameDestino = nameSnapshot.val();
+      }
 
       if (!emailDestino) {
         console.error(`No se encontró la propiedad 'email' para el usuario: ${uid_fb}`);
         return null;
       }
 
-      const nameRef = admin.database().ref(`/usuarios/${uid_fb}/nombre`);
-      const nameSnapshot = await nameRef.once('value');
-      const nameDestino = nameSnapshot.val();
-
       if (!nameDestino) {
-        console.error(`No se encontró la propiedad 'name' para el usuario: ${uid_fb}`);
-        return null;
+        console.warn(`No se encontró la propiedad 'name' para el usuario: ${uid_fb}. Enviando vacío...`);
+        nameDestino = ""; // Fallback para correos que no necesitan nombre
       }
 
       // 3. Preparamos el objeto final para n8n
@@ -248,6 +321,8 @@ exports.procesarColaEmails = functions.database.ref('/cola_procesamiento/emails/
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getAuth } = require("firebase-admin/auth");
 
+// Función 1: Permite obtener el uid de firebase de un usuario a partir de
+// su correo (El registrado en Firebase Auth)
 exports.obtenerUidPorCorreo = onCall(async (request) => {
   // 1. Verificación estricta de seguridad (Zero Trust)
   // Comprobar que el usuario está autenticado y posee el Custom Claim 'admin'
